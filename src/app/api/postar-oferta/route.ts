@@ -102,6 +102,8 @@ export async function POST(req: Request) {
     let destinos: string[] = [];
     if (targetChatId) {
       destinos = [targetChatId];
+    } else if (process.env.TELEGRAM_CHAT_ID) {
+      destinos = [process.env.TELEGRAM_CHAT_ID];
     } else {
       const canais = await db.getChannels();
       const canaisAtivos = canais.filter((c) => c.ativo && c.tipo !== 'admin');
@@ -109,7 +111,7 @@ export async function POST(req: Request) {
     }
 
     if (destinos.length === 0) {
-      destinos = ['@radarsshopee']; // Fallback padrão
+      destinos = [process.env.TELEGRAM_CHAT_ID || '@radarsshopee']; // Fallback padrão
     }
 
     let envioComSucesso = false;

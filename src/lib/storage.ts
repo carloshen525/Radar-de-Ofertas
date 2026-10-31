@@ -156,11 +156,12 @@ export const fileStorage = {
   },
 
   getChannels(): TelegramChannel[] {
+    const defaultChatId = process.env.TELEGRAM_CHAT_ID || '@radarsshopee';
     const list = readJsonFile<TelegramChannel[]>('channels.json', [
       {
         id: 'chan-001',
         nome: 'Canal Principal Achadinhos Shopee',
-        chat_id: '@radar_shopee_canal',
+        chat_id: defaultChatId,
         tipo: 'canal',
         ativo: true,
         total_enviados: 0,
