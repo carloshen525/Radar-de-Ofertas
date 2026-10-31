@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Radar,
@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   XCircle,
   ExternalLink,
+  LogOut,
 } from 'lucide-react';
 
 const navigation = [
@@ -30,6 +31,21 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  if (pathname === '/login') {
+    return null;
+  }
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      router.push('/login');
+      router.refresh();
+    } catch {
+      window.location.href = '/login';
+    }
+  };
 
   return (
     <aside className="w-64 bg-slate-900 text-slate-300 min-h-screen flex flex-col flex-shrink-0 border-r border-slate-800">
@@ -95,15 +111,22 @@ export function Sidebar() {
 
       {/* User Footer */}
       <div className="p-4 border-t border-slate-800 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs text-white">
-            AD
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-full bg-orange-600 flex items-center justify-center font-bold text-xs text-white flex-shrink-0">
+            CH
           </div>
-          <div className="text-xs">
-            <p className="font-medium text-white leading-tight">Admin Master</p>
-            <p className="text-slate-400 text-[10px]">admin@radarshopee.com</p>
+          <div className="text-xs min-w-0">
+            <p className="font-medium text-white leading-tight truncate">Carlos Henrique</p>
+            <p className="text-slate-400 text-[10px] truncate">carloshenrq1245@gmail.com</p>
           </div>
         </div>
+        <button
+          onClick={handleLogout}
+          title="Encerrar sessão"
+          className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded-lg transition-colors flex-shrink-0"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
     </aside>
   );
