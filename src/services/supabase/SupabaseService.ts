@@ -25,7 +25,14 @@ export interface ProdutoDB {
   vendas?: number;
 }
 
-const LOCAL_PRODUTOS_FILE = path.join(process.cwd(), 'data', 'produtos_serverless.json');
+const isServerless =
+  process.env.VERCEL === '1' ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME !== undefined ||
+  (process.env.NODE_ENV === 'production' && !fs.existsSync(path.join(process.cwd(), 'data')));
+
+const LOCAL_PRODUTOS_FILE = isServerless
+  ? path.join('/tmp', 'produtos_serverless.json')
+  : path.join(process.cwd(), 'data', 'produtos_serverless.json');
 
 export class SupabaseService {
   private client: SupabaseClient | null = null;
@@ -70,7 +77,7 @@ export class SupabaseService {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(LOCAL_PRODUTOS_FILE, JSON.stringify(produtos, null, 2), 'utf-8');
     } catch (err) {
-      console.error('Erro ao salvar produtos locais:', err);
+      // Silenciosamente ignorado em ambiente serverless com sistema de arquivos somente-leitura
     }
   }
 
@@ -230,38 +237,40 @@ export class SupabaseService {
         } catch {}
       }
 
-      // Salva no armazenamento local resiliente
-      const locais = this.readLocalProdutos();
-      if (!locais.some((p) => p.produto_id === novoProduto.produto_id)) {
-        locais.push(novoProduto);
-        this.writeLocalProdutos(locais);
-      }
+      // Salva no armazenamento local resiliente (se ambiente permitir)
+      try {
+        const locais = this.readLocalProdutos();
+        if (!locais.some((p) => p.produto_id === novoProduto.produto_id)) {
+          locais.push(novoProduto);
+          this.writeLocalProdutos(locais);
+        }
 
-      // Sincroniza também com o armazenamento do dashboard existente
-      const existingProds = fileStorage.getProducts();
-      if (!existingProds.some((p) => p.external_item_id === novoProduto.produto_id)) {
-        existingProds.push({
-          id: `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          external_item_id: novoProduto.produto_id,
-          marketplace: 'shopee',
-          nome: novoProduto.titulo,
-          imagem: novoProduto.imagem || '',
-          preco: novoProduto.preco,
-          preco_antigo: novoProduto.preco_original || novoProduto.preco,
-          desconto: novoProduto.desconto || 0,
-          avaliacao: novoProduto.avaliacao || 4.5,
-          vendas: novoProduto.vendas || 0,
-          categoria: novoProduto.categoria || 'Geral',
-          loja: novoProduto.loja || 'Shopee',
-          url_original: novoProduto.link_afiliado,
-          url_afiliado: novoProduto.link_afiliado,
-          score: 85,
-          status: 'aprovado',
-          created_at: novoProduto.criado_em || new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-        fileStorage.saveProducts(existingProds);
-      }
+        // Sincroniza também com o armazenamento do dashboard existente
+        const existingProds = fileStorage.getProducts();
+        if (!existingProds.some((p) => p.external_item_id === novoProduto.produto_id)) {
+          existingProds.push({
+            id: `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            external_item_id: novoProduto.produto_id,
+            marketplace: 'shopee',
+            nome: novoProduto.titulo,
+            imagem: novoProduto.imagem || '',
+            preco: novoProduto.preco,
+            preco_antigo: novoProduto.preco_original || novoProduto.preco,
+            desconto: novoProduto.desconto || 0,
+            avaliacao: novoProduto.avaliacao || 4.5,
+            vendas: novoProduto.vendas || 0,
+            categoria: novoProduto.categoria || 'Geral',
+            loja: novoProduto.loja || 'Shopee',
+            url_original: novoProduto.link_afiliado,
+            url_afiliado: novoProduto.link_afiliado,
+            score: 85,
+            status: 'aprovado',
+            created_at: novoProduto.criado_em || new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+          fileStorage.saveProducts(existingProds);
+        }
+      } catch {}
 
       adicionados++;
       produtosSalvos.push(novoProduto);

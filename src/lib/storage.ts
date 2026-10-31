@@ -12,37 +12,46 @@ import {
   SystemLog,
 } from './types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const isServerless =
+  process.env.VERCEL === '1' ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME !== undefined ||
+  (process.env.NODE_ENV === 'production' && !fs.existsSync(path.join(process.cwd(), 'data')));
+
+const DATA_DIR = isServerless ? path.join('/tmp', 'radar_data') : path.join(process.cwd(), 'data');
 const ENV_PATH = path.join(process.cwd(), '.env');
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+function ensureDataDir(): boolean {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
 function readJsonFile<T>(filename: string, fallback: T): T {
-  ensureDataDir();
-  const filePath = path.join(DATA_DIR, filename);
-  if (!fs.existsSync(filePath)) {
-    return fallback;
-  }
   try {
+    ensureDataDir();
+    const filePath = path.join(DATA_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+      return fallback;
+    }
     const raw = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(raw) as T;
   } catch (err) {
-    console.error(`Erro ao ler ${filename}:`, err);
     return fallback;
   }
 }
 
 function writeJsonFile<T>(filename: string, data: T): void {
-  ensureDataDir();
-  const filePath = path.join(DATA_DIR, filename);
   try {
+    if (!ensureDataDir()) return;
+    const filePath = path.join(DATA_DIR, filename);
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
-    console.error(`Erro ao gravar ${filename}:`, err);
+    // Silenciosamente ignorado em ambientes serverless com sistema de arquivos somente-leitura
   }
 }
 
@@ -61,6 +70,9 @@ export function cleanTelegramChatId(chatId: string): string {
 
 export function syncToEnvFile(key: string, value: string): void {
   try {
+    process.env[key] = value;
+    if (isServerless) return;
+
     let content = '';
     if (fs.existsSync(ENV_PATH)) {
       content = fs.readFileSync(ENV_PATH, 'utf-8');
@@ -76,9 +88,8 @@ export function syncToEnvFile(key: string, value: string): void {
     }
 
     fs.writeFileSync(ENV_PATH, content, 'utf-8');
-    process.env[key] = value;
   } catch (err) {
-    console.warn(`Não foi possível sincronizar ${key} no .env:`, err);
+    // Silenciosamente ignorado em ambientes serverless
   }
 }
 
