@@ -98,10 +98,42 @@ export class SupabaseService {
   }
 
   /**
-   * Salva os produtos na tabela `produtos`, ignorando duplicados
+   * Obtém os dados completos de um produto pelo seu produto_id
+   */
+  async obterProdutoPorId(produtoId: string): Promise<ProdutoDB | null> {
+    const supabase = this.initClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase
+          .from('produtos')
+          .select('*')
+          .eq('produto_id', produtoId)
+          .maybeSingle();
+
+        if (data) return data as ProdutoDB;
+      } catch {}
+    }
+
+    const locais = this.readLocalProdutos();
+    return locais.find((p) => p.produto_id === produtoId) || null;
+  }
+
+  /**
+   * Verifica se uma data de publicação está dentro da janela de cooldown (ex: 14 dias / 2 semanas)
+   */
+  estaEmCooldown(dataPublicacao?: string | null, diasCooldown: number = 14): boolean {
+    if (!dataPublicacao) return false;
+    const diffMs = Date.now() - new Date(dataPublicacao).getTime();
+    const cooldownMs = diasCooldown * 24 * 60 * 60 * 1000;
+    return diffMs < cooldownMs;
+  }
+
+  /**
+   * Salva os produtos na tabela `produtos`, ignorando duplicados dentro do cooldown de 14 dias
    */
   async salvarNovosProdutos(
-    produtos: ProdutoShopee[]
+    produtos: ProdutoShopee[],
+    diasCooldown: number = 14
   ): Promise<{ adicionados: number; existiam: number; produtosSalvos: ProdutoDB[] }> {
     let existiam = 0;
     let adicionados = 0;
@@ -109,11 +141,47 @@ export class SupabaseService {
 
     const supabase = this.initClient();
 
-    // 1. Carrega produtos existentes para verificar duplicidade
     for (const prod of produtos) {
-      const jaExiste = await this.existeProduto(prod.produto_id);
-      if (jaExiste) {
+      const produtoExistente = await this.obterProdutoPorId(prod.produto_id);
+
+      // Se o produto já existe:
+      if (produtoExistente) {
         existiam++;
+
+        // Se já passaram mais de 14 dias desde a última publicação, atualiza o preço e link da Shopee
+        // para deixá-lo com dados frescos quando for publicado novamente
+        if (
+          produtoExistente.publicado &&
+          produtoExistente.data_publicacao &&
+          !this.estaEmCooldown(produtoExistente.data_publicacao, diasCooldown)
+        ) {
+          if (supabase) {
+            try {
+              await supabase
+                .from('produtos')
+                .update({
+                  preco: prod.preco,
+                  preco_original: prod.preco_original || prod.preco,
+                  link_afiliado: prod.link_afiliado,
+                  imagem: prod.imagem,
+                  desconto: prod.desconto,
+                  avaliacao: prod.avaliacao,
+                  vendas: prod.vendas,
+                })
+                .eq('produto_id', prod.produto_id);
+            } catch {}
+          }
+
+          const locais = this.readLocalProdutos();
+          const lIdx = locais.findIndex((p) => p.produto_id === prod.produto_id);
+          if (lIdx !== -1) {
+            locais[lIdx].preco = prod.preco;
+            locais[lIdx].preco_original = prod.preco_original || prod.preco;
+            locais[lIdx].link_afiliado = prod.link_afiliado;
+            locais[lIdx].desconto = prod.desconto;
+            this.writeLocalProdutos(locais);
+          }
+        }
         continue;
       }
 
@@ -203,14 +271,18 @@ export class SupabaseService {
   }
 
   /**
-   * Busca apenas UM produto que ainda não foi publicado (publicado = false),
-   * preferencialmente o mais antigo ainda não publicado.
+   * Busca UM produto elegível respeitando a regra de nunca repetir em até 2 semanas (14 dias):
+   * 1. Prioridade máxima: produtos que NUNCA foram publicados (publicado = false ou data_publicacao IS NULL)
+   * 2. Segunda prioridade: produtos cuja última publicação ocorreu há mais de 14 dias (cooldown expirado)
    */
-  async obterProximoNaoPublicado(): Promise<ProdutoDB | null> {
+  async obterProximoElegivel(diasCooldown: number = 14): Promise<ProdutoDB | null> {
     const supabase = this.initClient();
+    const dataLimite = new Date(Date.now() - diasCooldown * 24 * 60 * 60 * 1000).toISOString();
+
     if (supabase) {
       try {
-        const { data, error } = await supabase
+        // 1. Tenta produto nunca publicado
+        const { data: nuncaPublicado } = await supabase
           .from('produtos')
           .select('*')
           .eq('publicado', false)
@@ -218,23 +290,61 @@ export class SupabaseService {
           .limit(1)
           .maybeSingle();
 
-        if (!error && data) {
-          return data as ProdutoDB;
+        if (nuncaPublicado) {
+          return nuncaPublicado as ProdutoDB;
+        }
+
+        // 2. Se todos já foram publicados, busca produto cuja publicação ocorreu há mais de 14 dias
+        const { data: expirado } = await supabase
+          .from('produtos')
+          .select('*')
+          .lt('data_publicacao', dataLimite)
+          .order('data_publicacao', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (expirado) {
+          return expirado as ProdutoDB;
         }
       } catch {}
     }
 
     // Busca no armazenamento local
     const locais = this.readLocalProdutos();
-    const naoPublicados = locais
-      .filter((p) => !p.publicado)
+
+    // 1. Nunca publicado
+    const nuncaPublicados = locais
+      .filter((p) => !p.publicado || !p.data_publicacao)
       .sort((a, b) => new Date(a.criado_em || 0).getTime() - new Date(b.criado_em || 0).getTime());
 
-    if (naoPublicados.length > 0) {
-      return naoPublicados[0];
+    if (nuncaPublicados.length > 0) {
+      return nuncaPublicados[0];
+    }
+
+    // 2. Publicado há mais de 14 dias (cooldown expirado)
+    const cooldownMs = diasCooldown * 24 * 60 * 60 * 1000;
+    const agora = Date.now();
+
+    const expirados = locais
+      .filter((p) => {
+        if (!p.data_publicacao) return true;
+        const diffMs = agora - new Date(p.data_publicacao).getTime();
+        return diffMs >= cooldownMs;
+      })
+      .sort((a, b) => new Date(a.data_publicacao || 0).getTime() - new Date(b.data_publicacao || 0).getTime());
+
+    if (expirados.length > 0) {
+      return expirados[0];
     }
 
     return null;
+  }
+
+  /**
+   * Mantém compatibilidade com a assinatura anterior, aplicando o cooldown de 14 dias
+   */
+  async obterProximoNaoPublicado(diasCooldown: number = 14): Promise<ProdutoDB | null> {
+    return this.obterProximoElegivel(diasCooldown);
   }
 
   /**

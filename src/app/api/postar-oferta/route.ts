@@ -27,24 +27,24 @@ export async function POST(req: Request) {
     let produtosShopee = await defaultShopeeService.buscarOfertas(1, 40, categoria);
     logger.info(`${produtosShopee.length} produtos encontrados.`);
 
-    // Etapa 2: Salvar no Supabase verificando duplicidade pelo produto_id
-    let resultadoSalvar = await defaultSupabaseService.salvarNovosProdutos(produtosShopee);
+    // Etapa 2: Salvar no Supabase verificando duplicidade pelo produto_id (respeitando cooldown de 14 dias / 2 semanas)
+    let resultadoSalvar = await defaultSupabaseService.salvarNovosProdutos(produtosShopee, 14);
     logger.info(`${resultadoSalvar.existiam} já existiam.`);
     logger.info(`${resultadoSalvar.adicionados} novos produtos adicionados.`);
 
-    // Etapa 3: Selecionar apenas um produto ainda não publicado (mais antigo)
-    logger.info('Selecionando próximo produto...');
-    let produtoParaPostar: ProdutoDB | null = await defaultSupabaseService.obterProximoNaoPublicado();
+    // Etapa 3: Selecionar apenas um produto elegível (nunca publicado OU publicado há mais de 2 semanas)
+    logger.info('Selecionando próximo produto (trava anti-repetição de 2 semanas ativa)...');
+    let produtoParaPostar: ProdutoDB | null = await defaultSupabaseService.obterProximoElegivel(14);
 
-    // Caso não existam produtos inéditos na fila:
+    // Caso não existam produtos elegíveis na fila:
     // Realiza uma nova busca na Shopee (página 2 ou termo alternativo)
     if (!produtoParaPostar) {
-      logger.info('Todos os produtos já foram publicados. Realizando nova busca na Shopee...');
+      logger.info('Nenhum produto livre na fila. Realizando busca avançada na Shopee (página 2)...');
       const produtosPagina2 = await defaultShopeeService.buscarOfertas(2, 40, categoria);
-      const resultado2 = await defaultSupabaseService.salvarNovosProdutos(produtosPagina2);
+      const resultado2 = await defaultSupabaseService.salvarNovosProdutos(produtosPagina2, 14);
       logger.info(`${resultado2.adicionados} novos produtos adicionados na segunda busca.`);
 
-      produtoParaPostar = await defaultSupabaseService.obterProximoNaoPublicado();
+      produtoParaPostar = await defaultSupabaseService.obterProximoElegivel(14);
     }
 
     // Se mesmo assim não existir nenhum produto novo:
@@ -69,9 +69,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // Validação estrita: confirmar se o produto realmente ainda não foi publicado
-    if (produtoParaPostar.publicado) {
-      const msg = 'Produto selecionado já constava como publicado. Ignorando para evitar duplicidade.';
+    // Validação estrita: confirmar se o produto realmente não foi publicado nos últimos 14 dias
+    if (defaultSupabaseService.estaEmCooldown(produtoParaPostar.data_publicacao, 14)) {
+      const msg = 'Produto selecionado já foi publicado nos últimos 14 dias (cooldown de 2 semanas). Ignorando para evitar repetição.';
       logger.info(msg);
       return NextResponse.json({
         success: true,
@@ -80,7 +80,16 @@ export async function POST(req: Request) {
       });
     }
 
-    logger.info(`Produto escolhido:\n${produtoParaPostar.titulo}`);
+    if (produtoParaPostar.data_publicacao) {
+      const dias = Math.floor(
+        (Date.now() - new Date(produtoParaPostar.data_publicacao).getTime()) / (1000 * 60 * 60 * 24)
+      );
+      logger.info(
+        `Produto escolhido:\n${produtoParaPostar.titulo}\n(Status: Re-publicação liberada após ${dias} dias - intervalo mínimo de 2 semanas cumprido)`
+      );
+    } else {
+      logger.info(`Produto escolhido:\n${produtoParaPostar.titulo}\n(Status: Produto inédito - nunca postado anteriormente)`);
+    }
 
     // Etapa 4: Gerar automaticamente a postagem utilizando o layout oficial
     logger.info('Gerando postagem...');

@@ -169,21 +169,35 @@ export class AutomationEngine {
         .sort((a, b) => b.score - a.score);
 
       const publicacoesExistentes = await db.getPublications();
+      const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
+      const agora = Date.now();
 
-      // Encontra produtos prontos que ainda NÃO foram publicados com sucesso
+      // Encontra produtos prontos elegíveis: nunca publicados OU cuja última publicação ocorreu há mais de 14 dias (2 semanas)
       const produtosNaoPublicados = produtosProntos.filter((prod) => {
-        const jaPublicado = publicacoesExistentes.some(
+        const publicacoesDeste = publicacoesExistentes.filter(
           (pub) => pub.product_id === prod.id && pub.status === 'publicado'
         );
-        return !jaPublicado;
+
+        if (publicacoesDeste.length === 0) return true; // Nunca publicado
+
+        // Se tiver sido publicado, verifica se ocorreu dentro da janela de 14 dias
+        const publicadoRecentemente = publicacoesDeste.some((pub) => {
+          const pubTime = new Date(pub.published_at).getTime();
+          return agora - pubTime < TWO_WEEKS_MS;
+        });
+
+        return !publicadoRecentemente; // Liberado se já passaram 14 dias
       });
 
-      // Se algum produto já foi publicado anteriormente mas ainda consta como 'aprovado', atualiza para 'publicado'
+      // Se algum produto já foi publicado nos últimos 14 dias mas ainda consta como 'aprovado', atualiza para 'publicado'
       for (const prod of produtosProntos) {
-        const jaPublicado = publicacoesExistentes.some(
-          (pub) => pub.product_id === prod.id && pub.status === 'publicado'
+        const publicadoRecentemente = publicacoesExistentes.some(
+          (pub) =>
+            pub.product_id === prod.id &&
+            pub.status === 'publicado' &&
+            agora - new Date(pub.published_at).getTime() < TWO_WEEKS_MS
         );
-        if (jaPublicado && prod.status !== 'publicado') {
+        if (publicadoRecentemente && prod.status !== 'publicado') {
           await db.updateProduct(prod.id, { status: 'publicado' });
         }
       }
@@ -195,19 +209,20 @@ export class AutomationEngine {
       let published = 0;
       let errors = 0;
 
-      // Publica até 2 produtos não publicados por ciclo
+      // Publica até 2 produtos elegíveis por ciclo
       const batch = produtosNaoPublicados.slice(0, 2);
 
       for (const produto of batch) {
         for (const canal of canaisAtivos) {
-          const jaPublicadoNesseCanal = publicacoesExistentes.some(
+          const jaPublicadoRecentementeNesseCanal = publicacoesExistentes.some(
             (pub) =>
               pub.product_id === produto.id &&
               pub.telegram_channel === canal.chat_id &&
-              pub.status === 'publicado'
+              pub.status === 'publicado' &&
+              agora - new Date(pub.published_at).getTime() < TWO_WEEKS_MS
           );
 
-          if (jaPublicadoNesseCanal) continue;
+          if (jaPublicadoRecentementeNesseCanal) continue;
 
           const resultado = await defaultTelegramService.publishOffer({
             chatId: canal.chat_id,
