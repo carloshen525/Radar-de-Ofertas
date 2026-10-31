@@ -1,0 +1,199 @@
+{
+  "name": "Radar Shopee - 01. Buscar Ofertas",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8,10,12,14,16,18,20 * * *"
+            }
+          ]
+        }
+      },
+      "id": "10000001-0000-0000-0000-000000000001",
+      "name": "Horários Programados",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT categoria, desconto_minimo, preco_maximo FROM settings WHERE ativo = true;"
+      },
+      "id": "10000001-0000-0000-0000-000000000002",
+      "name": "Buscar Categorias Ativas (Supabase)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\n// Obtém credenciais das variáveis de ambiente ou configurações do n8n\nconst appId = $env.SHOPEE_APP_ID || 'SEU_SHOPEE_APP_ID';\nconst secret = $env.SHOPEE_SECRET || 'SEU_SHOPEE_SECRET';\n\nconst items = $input.all();\nconst requests = [];\n\nfor (const item of items) {\n  const categoria = item.json.categoria || 'Geral';\n  const timestamp = Math.floor(Date.now() / 1000);\n  \n  // Query GraphQL oficial da Shopee Affiliate Open API\n  const graphQlQuery = `\n    query GetOffers($keyword: String, $page: Int, $limit: Int, $sortType: Int) {\n      productOfferV2(keyword: $keyword, page: $page, limit: $limit, sortType: $sortType) {\n        nodes {\n          itemId\n          productName\n          imageUrl\n          priceMin\n          priceMax\n          priceDiscountRate\n          sales\n          ratingStar\n          shopName\n          productLink\n          offerLink\n        }\n      }\n    }\n  `;\n  \n  const payloadObj = {\n    query: graphQlQuery,\n    variables: {\n      keyword: categoria,\n      page: 1,\n      limit: 25,\n      sortType: 1 // Ordenar por mais vendidos/destaques\n    }\n  };\n  \n  const payloadStr = JSON.stringify(payloadObj);\n  \n  // Cálculo da assinatura oficial Shopee SHA256\n  const factor = appId + timestamp + payloadStr + secret;\n  const signature = crypto.createHash('sha256').update(factor).digest('hex');\n  \n  requests.push({\n    json: {\n      categoria: categoria,\n      payload: payloadObj,\n      headers: {\n        'Content-Type': 'application/json',\n        'Authorization': `SHA256 Credential=${appId}, Timestamp=${timestamp}, Signature=${signature}`\n      }\n    }\n  });\n}\n\nreturn requests;"
+      },
+      "id": "10000001-0000-0000-0000-000000000003",
+      "name": "Preparar Requisicao Shopee API",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://open-api.affiliate.shopee.com.br/graphql",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "={{ $json.headers['Content-Type'] }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.headers['Authorization'] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "10000001-0000-0000-0000-000000000004",
+      "name": "Chamar Shopee Affiliate API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst produtosMapeados = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const res = items[i].json;\n  // Categoria consultada nessa iteração correspondente\n  const categoria = $('Preparar Requisicao Shopee API').all()[i]?.json?.categoria || 'Geral';\n  \n  const nodes = res?.data?.productOfferV2?.nodes || [];\n  \n  for (const prod of nodes) {\n    if (!prod.itemId || !prod.productName) continue;\n    \n    const preco = parseFloat(prod.priceMin || prod.priceMax || 0);\n    const descontoRate = parseFloat(prod.priceDiscountRate || 0);\n    \n    // Calcula preco antigo estimado se houver desconto\n    let precoAntigo = preco;\n    if (descontoRate > 0) {\n      precoAntigo = parseFloat((preco / (1 - (descontoRate / 100))).toFixed(2));\n    }\n    \n    produtosMapeados.push({\n      json: {\n        shopee_item_id: String(prod.itemId),\n        nome: prod.productName,\n        imagem: prod.imageUrl || '',\n        preco: preco,\n        preco_antigo: precoAntigo,\n        desconto: descontoRate,\n        avaliacao: parseFloat(prod.ratingStar || 0),\n        vendas: parseInt(prod.sales || 0, 10),\n        categoria: categoria,\n        loja: prod.shopName || 'Loja Shopee',\n        url_original: prod.productLink || '',\n        url_afiliado: prod.offerLink || prod.productLink || '',\n        status: 'encontrado',\n        marketplace: 'shopee'\n      }\n    });\n  }\n}\n\nreturn produtosMapeados;"
+      },
+      "id": "10000001-0000-0000-0000-000000000005",
+      "name": "Normalizar Dados dos Produtos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO products (\n  shopee_item_id,\n  nome,\n  imagem,\n  preco,\n  preco_antigo,\n  desconto,\n  avaliacao,\n  vendas,\n  categoria,\n  loja,\n  url_original,\n  url_afiliado,\n  status,\n  marketplace\n)\nVALUES (\n  '{{ $json.shopee_item_id }}',\n  '{{ $json.nome.replace(/'/g, \"''\") }}',\n  '{{ $json.imagem }}',\n  {{ $json.preco }},\n  {{ $json.preco_antigo }},\n  {{ $json.desconto }},\n  {{ $json.avaliacao }},\n  {{ $json.vendas }},\n  '{{ $json.categoria }}',\n  '{{ $json.loja.replace(/'/g, \"''\") }}',\n  '{{ $json.url_original }}',\n  '{{ $json.url_afiliado }}',\n  'encontrado',\n  'shopee'\n)\nON CONFLICT (shopee_item_id) DO UPDATE SET\n  preco = EXCLUDED.preco,\n  preco_antigo = EXCLUDED.preco_antigo,\n  desconto = EXCLUDED.desconto,\n  avaliacao = EXCLUDED.avaliacao,\n  vendas = EXCLUDED.vendas,\n  url_afiliado = COALESCE(EXCLUDED.url_afiliado, products.url_afiliado),\n  updated_at = NOW()\nRETURNING id, shopee_item_id, status;"
+      },
+      "id": "10000001-0000-0000-0000-000000000006",
+      "name": "Upsert no Supabase (products)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1320, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_logs (workflow, status, detalhes)\nVALUES (\n  '01_buscar_ofertas',\n  'sucesso',\n  json_build_object('total_processados', {{ $('Normalizar Dados dos Produtos').all().length }})\n);"
+      },
+      "id": "10000001-0000-0000-0000-000000000007",
+      "name": "Registrar Log de Sucesso",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1540, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Horários Programados": {
+      "main": [
+        [
+          {
+            "node": "Buscar Categorias Ativas (Supabase)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Categorias Ativas (Supabase)": {
+      "main": [
+        [
+          {
+            "node": "Preparar Requisicao Shopee API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Requisicao Shopee API": {
+      "main": [
+        [
+          {
+            "node": "Chamar Shopee Affiliate API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chamar Shopee Affiliate API": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Dados dos Produtos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Dados dos Produtos": {
+      "main": [
+        [
+          {
+            "node": "Upsert no Supabase (products)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert no Supabase (products)": {
+      "main": [
+        [
+          {
+            "node": "Registrar Log de Sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+

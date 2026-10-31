@@ -1,0 +1,92 @@
+{
+  "name": "Radar Shopee - 06. Gerenciamento de Erros",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "60000006-0000-0000-0000-000000000001",
+      "name": "Gatilho de Erro Global",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first().json;\n\nconst workflowName = inputData.workflow?.name || 'Workflow Desconhecido';\nconst executionId = inputData.execution?.id || 'N/A';\nconst nodeName = inputData.execution?.error?.node?.name || 'Node Desconhecido';\nconst errorMessage = inputData.execution?.error?.message || 'Erro sem mensagem explícita';\n\nconst payloadAlerta = '🚨 *ALERTA RADAR SHOPEE - FALHA NO FLUXO* 🚨\\n\\n' +\n  '📌 *Workflow:* ' + workflowName + '\\n' +\n  '⚙️ *Nó:* ' + nodeName + '\\n' +\n  '🆔 *Execução:* ' + executionId + '\\n\\n' +\n  '💥 *Erro:* ' + errorMessage.substring(0, 300) + '\\n\\n' +\n  '🕒 *Data/Hora:* ' + new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });\n\nreturn [{\n  json: {\n    workflow: workflowName,\n    status: 'erro',\n    erro: errorMessage,\n    detalhes: inputData.execution?.error || {},\n    texto_alerta: payloadAlerta,\n    admin_chat_id: $env.TELEGRAM_ADMIN_CHAT_ID\n  }\n}];"
+      },
+      "id": "60000006-0000-0000-0000-000000000002",
+      "name": "Processar Dados do Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_logs (workflow, status, erro, detalhes)\nVALUES (\n  '{{ $json.workflow }}',\n  'erro',\n  '{{ $json.erro.replace(/'/g, \"''\") }}',\n  '{{ JSON.stringify($json.detalhes).replace(/'/g, \"''\") }}'::jsonb\n);"
+      },
+      "id": "60000006-0000-0000-0000-000000000003",
+      "name": "Gravar Falha em workflow_logs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Processar Dados do Erro').first().json.admin_chat_id }}\",\n  \"text\": \"{{ $('Processar Dados do Erro').first().json.texto_alerta }}\",\n  \"parse_mode\": \"Markdown\"\n}"
+      },
+      "id": "60000006-0000-0000-0000-000000000004",
+      "name": "Notificar Admin no Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "Gatilho de Erro Global": {
+      "main": [
+        [
+          {
+            "node": "Processar Dados do Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar Dados do Erro": {
+      "main": [
+        [
+          {
+            "node": "Gravar Falha em workflow_logs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravar Falha em workflow_logs": {
+      "main": [
+        [
+          {
+            "node": "Notificar Admin no Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

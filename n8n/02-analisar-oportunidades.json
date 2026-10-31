@@ -1,0 +1,161 @@
+{
+  "name": "Radar Shopee - 02. Analisar Oportunidades",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 8,10,12,14,16,18,20 * * *"
+            }
+          ]
+        }
+      },
+      "id": "20000002-0000-0000-0000-000000000001",
+      "name": "Gatilho de Análise",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM products WHERE status = 'encontrado' ORDER BY created_at DESC LIMIT 100;"
+      },
+      "id": "20000002-0000-0000-0000-000000000002",
+      "name": "Buscar Produtos 'Encontrado'",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT categoria, desconto_minimo, avaliacao_minima, vendas_minimas, preco_maximo FROM settings WHERE ativo = true;"
+      },
+      "id": "20000002-0000-0000-0000-000000000003",
+      "name": "Buscar Regras de Filtro (Settings)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [640, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const produtos = $('Buscar Produtos \\'Encontrado\\'').all();\nconst settingsList = $('Buscar Regras de Filtro (Settings)').all().map(s => s.json);\n\n// Indexa configurações por categoria com fallback padrão\nconst settingsMap = {};\nfor (const s of settingsList) {\n  settingsMap[s.categoria.toLowerCase()] = s;\n}\n\nconst defaultSetting = {\n  desconto_minimo: 30.0,\n  avaliacao_minima: 4.5,\n  vendas_minimas: 100,\n  preco_maximo: 800.0\n};\n\nconst resultados = [];\n\nfor (const p of produtos) {\n  const item = p.json;\n  const catLower = (item.categoria || '').toLowerCase();\n  const cfg = settingsMap[catLower] || defaultSetting;\n  \n  const preco = parseFloat(item.preco || 0);\n  const desconto = parseFloat(item.desconto || 0);\n  const avaliacao = parseFloat(item.avaliacao || 0);\n  const vendas = parseInt(item.vendas || 0, 10);\n  const imagem = (item.imagem || '').trim();\n  \n  let status = 'aprovado';\n  let motivo = '';\n  \n  // Validações de integridade e qualidade\n  if (!imagem || imagem.length < 10) {\n    status = 'rejeitado';\n    motivo = 'Sem imagem válida';\n  } else if (desconto < parseFloat(cfg.desconto_minimo)) {\n    status = 'rejeitado';\n    motivo = `Desconto (${desconto}%) menor que mínimo (${cfg.desconto_minimo}%)`;\n  } else if (avaliacao < parseFloat(cfg.avaliacao_minima)) {\n    status = 'rejeitado';\n    motivo = `Avaliação (${avaliacao}⭐) menor que mínima (${cfg.avaliacao_minima}⭐)`;\n  } else if (vendas < parseInt(cfg.vendas_minimas, 10)) {\n    status = 'rejeitado';\n    motivo = `Vendas (${vendas}) menor que mínimo (${cfg.vendas_minimas})`;\n  } else if (preco > parseFloat(cfg.preco_maximo)) {\n    status = 'rejeitado';\n    motivo = `Preço (R$ ${preco}) maior que teto permitido (R$ ${cfg.preco_maximo})`;\n  }\n  \n  // Cálculo da Pontuação Ponderada (0 a 100 pontos)\n  // 1. Desconto: até 40 pontos (40% de peso)\n  const scoreDesconto = Math.min((desconto / 70) * 40, 40);\n  \n  // 2. Avaliação: até 30 pontos (30% de peso) - Escala de 4.0 a 5.0 estrelas\n  const scoreAvaliacao = Math.max(0, Math.min(((avaliacao - 4.0) / 1.0) * 30, 30));\n  \n  // 3. Vendas: até 20 pontos (20% de peso) - Teto em 1000 vendas para pontuação máxima\n  const scoreVendas = Math.min((vendas / 1000) * 20, 20);\n  \n  // 4. Preço acessível/ticket ideal: até 10 pontos (10% de peso)\n  let scorePreco = 5;\n  if (preco > 0 && preco <= 150) scorePreco = 10;\n  else if (preco <= 350) scorePreco = 8;\n  else if (preco <= 600) scorePreco = 6;\n  \n  const scoreTotal = parseFloat((scoreDesconto + scoreAvaliacao + scoreVendas + scorePreco).toFixed(2));\n  \n  resultados.push({\n    json: {\n      id: item.id,\n      shopee_item_id: item.shopee_item_id,\n      nome: item.nome,\n      status: status,\n      score: scoreTotal,\n      motivo_rejeicao: motivo,\n      categoria: item.categoria,\n      preco: preco,\n      desconto: desconto\n    }\n  });\n}\n\n// Ordena aprovados primeiro pelo maior score\nresultados.sort((a, b) => b.json.score - a.json.score);\n\nreturn resultados;"
+      },
+      "id": "20000002-0000-0000-0000-000000000004",
+      "name": "Filtrar e Calcular Pontuacao",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE products\nSET\n  status = '{{ $json.status }}',\n  score = {{ $json.score }},\n  motivo_rejeicao = '{{ $json.motivo_rejeicao.replace(/'/g, \"''\") }}',\n  updated_at = NOW()\nWHERE id = '{{ $json.id }}';"
+      },
+      "id": "20000002-0000-0000-0000-000000000005",
+      "name": "Atualizar Status no Supabase",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1100, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_logs (workflow, status, detalhes)\nVALUES (\n  '02_analisar_oportunidades',\n  'sucesso',\n  json_build_object(\n    'total_analisados', {{ $('Filtrar e Calcular Pontuacao').all().length }},\n    'aprovados', {{ $('Filtrar e Calcular Pontuacao').all().filter(i => i.json.status === 'aprovado').length }}\n  )\n);"
+      },
+      "id": "20000002-0000-0000-0000-000000000006",
+      "name": "Registrar Log de Analise",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1320, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gatilho de Análise": {
+      "main": [
+        [
+          {
+            "node": "Buscar Produtos 'Encontrado'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Produtos 'Encontrado'": {
+      "main": [
+        [
+          {
+            "node": "Buscar Regras de Filtro (Settings)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Regras de Filtro (Settings)": {
+      "main": [
+        [
+          {
+            "node": "Filtrar e Calcular Pontuacao",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar e Calcular Pontuacao": {
+      "main": [
+        [
+          {
+            "node": "Atualizar Status no Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Atualizar Status no Supabase": {
+      "main": [
+        [
+          {
+            "node": "Registrar Log de Analise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+

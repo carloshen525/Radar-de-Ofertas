@@ -1,0 +1,84 @@
+{
+  "name": "Radar Shopee - 07 Automação Serverless (Vercel + N8N + Supabase)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "node-schedule-trigger",
+      "name": "Agendador a cada 30 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://seu-app.vercel.app/api/postar-oferta",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"categoria\": \"Geral\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "node-http-request-postar-oferta",
+      "name": "Disparar API Vercel (/api/postar-oferta)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-if-success",
+      "name": "Sucesso?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [720, 300]
+    }
+  ],
+  "connections": {
+    "Agendador a cada 30 min": {
+      "main": [
+        [
+          {
+            "node": "Disparar API Vercel (/api/postar-oferta)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Disparar API Vercel (/api/postar-oferta)": {
+      "main": [
+        [
+          {
+            "node": "Sucesso?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+

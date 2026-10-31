@@ -1,0 +1,200 @@
+{
+  "name": "Radar Shopee - 03. Gerar Postagem IA",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 8,10,12,14,16,18,20 * * *"
+            }
+          ]
+        }
+      },
+      "id": "30000003-0000-0000-0000-000000000001",
+      "name": "Gatilho de Copys IA",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, nome, preco, preco_antigo, desconto, avaliacao, vendas, categoria, loja, url_afiliado\nFROM products\nWHERE status = 'aprovado' AND (legenda_ia IS NULL OR legenda_ia = '')\nORDER BY score DESC, created_at DESC\nLIMIT 15;"
+      },
+      "id": "30000003-0000-0000-0000-000000000002",
+      "name": "Buscar Aprovados Sem Legenda",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [420, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "30000003-0000-0000-0000-000000000003",
+      "name": "Processar 1 por Vez (Loop)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_API_URL || 'https://api.openai.com/v1/chat/completions' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.OPENAI_API_KEY || $env.AI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $env.AI_MODEL || 'gpt-4o-mini' }}\",\n  \"temperature\": 0.7,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Você é um copywriter de elite especialista em criar postagens curtas, atraentes e vendedoras para canais de achadinhos e ofertas no Telegram. Retorne APENAS o texto final da legenda formatado para Telegram, sem explicações extras, sem aspas e sem markdown inválido.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Crie uma legenda para o seguinte produto da Shopee:\\n\\nProduto: {{ $json.nome }}\\nPreço Promocional: R$ {{ $json.preco.toFixed(2) }}\\nPreço Anterior: R$ {{ $json.preco_antigo ? $json.preco_antigo.toFixed(2) : '' }}\\nDesconto: {{ $json.desconto }}% OFF\\nAvaliação: {{ $json.avaliacao }} estrelas ({{ $json.vendas }} vendidos)\\nCategoria: {{ $json.categoria }}\\nLoja: {{ $json.loja }}\\n\\nSiga este estilo estruturado:\\n🔥 ACHADINHO DO DIA!\\n\\n[NOME DO PRODUTO LIMPO E CHAMATIVO]\\n\\n💰 Por apenas:\\n🔥 R$ XX,XX (XX% OFF)\\n❌ De R$ XX,XX\\n\\n⭐ Avaliação X.X/5.0 (+X vendas)\\n🛒 Garanta o seu antes que o cupom ou estoque acabe!\"\n    }\n  ]\n}"
+      },
+      "id": "30000003-0000-0000-0000-000000000004",
+      "name": "Gerar Copy com IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const itemOrig = $('Processar 1 por Vez (Loop)').first().json;\nconst aiResponse = $input.first().json;\n\nconst rawCopy = aiResponse?.choices?.[0]?.message?.content || '';\n// Limpa possíveis quebras indesejadas e formata\nconst cleanCopy = rawCopy.trim();\n\nreturn [{\n  json: {\n    id: itemOrig.id,\n    legenda_ia: cleanCopy\n  }\n}];"
+      },
+      "id": "30000003-0000-0000-0000-000000000005",
+      "name": "Normalizar Legenda",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE products\nSET\n  legenda_ia = '{{ $json.legenda_ia.replace(/'/g, \"''\") }}',\n  updated_at = NOW()\nWHERE id = '{{ $json.id }}';"
+      },
+      "id": "30000003-0000-0000-0000-000000000006",
+      "name": "Salvar Legenda no Supabase",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1300, 300],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO workflow_logs (workflow, status, detalhes)\nVALUES (\n  '03_gerar_postagem_ia',\n  'sucesso',\n  json_build_object('total_gerados', {{ $('Buscar Aprovados Sem Legenda').all().length }})\n);"
+      },
+      "id": "30000003-0000-0000-0000-000000000007",
+      "name": "Registrar Log IA",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1520, 480],
+      "credentials": {
+        "postgres": {
+          "id": "supabase_postgres_credential",
+          "name": "Supabase Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gatilho de Copys IA": {
+      "main": [
+        [
+          {
+            "node": "Buscar Aprovados Sem Legenda",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Aprovados Sem Legenda": {
+      "main": [
+        [
+          {
+            "node": "Processar 1 por Vez (Loop)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar 1 por Vez (Loop)": {
+      "main": [
+        [
+          {
+            "node": "Gerar Copy com IA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Log IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar Copy com IA": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Legenda",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Legenda": {
+      "main": [
+        [
+          {
+            "node": "Salvar Legenda no Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Legenda no Supabase": {
+      "main": [
+        [
+          {
+            "node": "Processar 1 por Vez (Loop)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
+
