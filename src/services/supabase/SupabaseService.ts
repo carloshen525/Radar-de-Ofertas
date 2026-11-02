@@ -3,6 +3,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ProdutoShopee } from '@/services/shopee/ShopeeService';
 import { fileStorage } from '@/lib/storage';
+import { isRoupaFeminina } from '@/lib/filters';
 import path from 'path';
 import fs from 'fs';
 
@@ -149,6 +150,11 @@ export class SupabaseService {
     const supabase = this.initClient();
 
     for (const prod of produtos) {
+      // Bloqueio de segurança: descarta roupas femininas antes de salvar
+      if (isRoupaFeminina(prod.titulo, prod.categoria)) {
+        continue;
+      }
+
       const produtoExistente = await this.obterProdutoPorId(prod.produto_id);
 
       // Se o produto já existe:
@@ -290,30 +296,41 @@ export class SupabaseService {
 
     if (supabase) {
       try {
-        // 1. Tenta produto nunca publicado
-        const { data: nuncaPublicado } = await supabase
+        // 1. Tenta produtos nunca publicados (analisa lote para filtrar roupas femininas)
+        const { data: nuncaPublicados } = await supabase
           .from('produtos')
           .select('*')
           .eq('publicado', false)
           .order('criado_em', { ascending: true })
-          .limit(1)
-          .maybeSingle();
+          .limit(50);
 
-        if (nuncaPublicado) {
-          return nuncaPublicado as ProdutoDB;
+        if (Array.isArray(nuncaPublicados) && nuncaPublicados.length > 0) {
+          for (const item of nuncaPublicados) {
+            if (!isRoupaFeminina(item.titulo, item.categoria)) {
+              return item as ProdutoDB;
+            } else {
+              // Se já estava no banco, descarta marcando como publicado para não travar a fila
+              try {
+                await supabase.from('produtos').update({ publicado: true }).eq('produto_id', item.produto_id);
+              } catch {}
+            }
+          }
         }
 
-        // 2. Se todos já foram publicados, busca produto cuja publicação ocorreu há mais de 14 dias
-        const { data: expirado } = await supabase
+        // 2. Se todos já foram publicados, busca produtos cujo cooldown de 14 dias expirou
+        const { data: expirados } = await supabase
           .from('produtos')
           .select('*')
           .lt('data_publicacao', dataLimite)
           .order('data_publicacao', { ascending: true })
-          .limit(1)
-          .maybeSingle();
+          .limit(50);
 
-        if (expirado) {
-          return expirado as ProdutoDB;
+        if (Array.isArray(expirados) && expirados.length > 0) {
+          for (const item of expirados) {
+            if (!isRoupaFeminina(item.titulo, item.categoria)) {
+              return item as ProdutoDB;
+            }
+          }
         }
       } catch {}
     }
@@ -321,9 +338,9 @@ export class SupabaseService {
     // Busca no armazenamento local
     const locais = this.readLocalProdutos();
 
-    // 1. Nunca publicado
+    // 1. Nunca publicado (filtrando roupas femininas)
     const nuncaPublicados = locais
-      .filter((p) => !p.publicado || !p.data_publicacao)
+      .filter((p) => (!p.publicado || !p.data_publicacao) && !isRoupaFeminina(p.titulo, p.categoria))
       .sort((a, b) => new Date(a.criado_em || 0).getTime() - new Date(b.criado_em || 0).getTime());
 
     if (nuncaPublicados.length > 0) {
@@ -336,6 +353,7 @@ export class SupabaseService {
 
     const expirados = locais
       .filter((p) => {
+        if (isRoupaFeminina(p.titulo, p.categoria)) return false;
         if (!p.data_publicacao) return true;
         const diffMs = agora - new Date(p.data_publicacao).getTime();
         return diffMs >= cooldownMs;

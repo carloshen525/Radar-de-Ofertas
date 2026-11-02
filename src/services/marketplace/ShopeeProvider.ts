@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { MarketplaceProvider, SearchOffersResult } from './MarketplaceProvider';
 import { Product, RadarFilterConfig } from '@/lib/types';
 import { db } from '@/lib/db';
+import { isRoupaFeminina } from '@/lib/filters';
 
 export class ShopeeProvider implements MarketplaceProvider {
   readonly marketplaceName = 'shopee';
@@ -279,6 +280,9 @@ export class ShopeeProvider implements MarketplaceProvider {
       if (preco <= 0 && (!item.priceMin && !item.priceMax)) continue;
       if (precoMin > 0 && preco < precoMin) continue;
       if (precoMax > 0 && preco > precoMax) continue;
+
+      // Filtro de exclusão: Nunca processar ou cadastrar roupas femininas
+      if (isRoupaFeminina(item.productName, config.categoria)) continue;
 
       let precoAntigo = preco;
       if (descontoRate > 0) {

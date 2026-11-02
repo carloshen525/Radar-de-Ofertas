@@ -2,6 +2,7 @@
 
 import { ShopeeProvider } from '@/services/marketplace/ShopeeProvider';
 import { fileStorage } from '@/lib/storage';
+import { isRoupaFeminina } from '@/lib/filters';
 
 export interface ProdutoShopee {
   produto_id: string;
@@ -42,7 +43,9 @@ export class ShopeeService {
       precoMaximo: 2000,
     });
 
-    return (result.products || []).map((p) => {
+    return (result.products || [])
+      .filter((p) => !isRoupaFeminina(p.nome, p.categoria))
+      .map((p) => {
       let precoAntigo = p.preco_antigo;
       if (!precoAntigo && p.desconto > 0) {
         precoAntigo = parseFloat((p.preco / (1 - p.desconto / 100)).toFixed(2));

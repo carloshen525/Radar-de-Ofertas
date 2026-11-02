@@ -8,6 +8,7 @@ import { defaultPostGeneratorService } from '@/services/postGenerator';
 import { defaultTelegramService } from '@/services/telegram';
 import { AutomationLogger } from '@/utils/logger';
 import { db } from '@/lib/db';
+import { isRoupaFeminina } from '@/lib/filters';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // 60 segundos para execução na Vercel
@@ -66,6 +67,23 @@ export async function POST(req: Request) {
         message: msg,
         logs: logger.getLogs(),
         logs_texto: logger.getText(),
+      });
+    }
+
+    // Filtro adicional de segurança: se for roupa feminina, descarta e tenta selecionar outro
+    while (produtoParaPostar && isRoupaFeminina(produtoParaPostar.titulo, produtoParaPostar.categoria)) {
+      logger.info(`Produto "${produtoParaPostar.titulo}" ignorado (filtro anti-roupas femininas ativo).`);
+      await defaultSupabaseService.marcarComoPublicado(produtoParaPostar.produto_id);
+      produtoParaPostar = await defaultSupabaseService.obterProximoElegivel(14);
+    }
+
+    if (!produtoParaPostar) {
+      const msg = 'Nenhum produto elegível disponível após aplicação dos filtros de exclusão.';
+      logger.info(msg);
+      return NextResponse.json({
+        success: true,
+        message: msg,
+        logs: logger.getLogs(),
       });
     }
 
