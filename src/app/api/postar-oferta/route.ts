@@ -9,6 +9,7 @@ import { defaultTelegramService } from '@/services/telegram';
 import { AutomationLogger } from '@/utils/logger';
 import { db } from '@/lib/db';
 import { isRoupaFeminina } from '@/lib/filters';
+import { verificarPausaNoturna } from '@/lib/schedule';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // 60 segundos para execução na Vercel
@@ -22,6 +23,33 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const categoria = body.categoria || 'Geral';
     const targetChatId = body.chatId || body.chat_id;
+    const forcarDisparo = body.forcar_disparo === true || body.ignorar_pausa === true;
+
+    // Regra do Piloto Automático: Roda o dia todo, pausando apenas entre 00:30 e 06:00 (Brasília)
+    const statusPausa = verificarPausaNoturna();
+    if (statusPausa.emPausa && !forcarDisparo) {
+      logger.info(statusPausa.mensagem);
+      logger.info(`Próxima retomada das postagens: ${statusPausa.proximaRetomada}.`);
+      logger.info('Automação em repouso noturno.');
+
+      await db.addLog({
+        modulo: 'automacao',
+        evento: 'Pausa Noturna (00:30 às 06:00)',
+        status: 'sucesso',
+        mensagem: statusPausa.mensagem,
+        detalhes: { hora: statusPausa.horaAtualFormatada, proxima: statusPausa.proximaRetomada },
+      });
+
+      return NextResponse.json({
+        success: true,
+        em_pausa_noturna: true,
+        hora_brasilia: statusPausa.horaAtualFormatada,
+        message: statusPausa.mensagem,
+        proxima_retomada: statusPausa.proximaRetomada,
+        logs: logger.getLogs(),
+        logs_texto: logger.getText(),
+      });
+    }
 
     // Etapa 1: Buscar novos produtos utilizando a API da Shopee
     logger.info('Buscando produtos...');

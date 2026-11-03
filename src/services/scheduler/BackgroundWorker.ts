@@ -1,10 +1,16 @@
-// Robô de Automação em Background (Execução Contínua e Automática)
+// Robô de Automação em Background (Execução Contínua e Automática 24/7)
+// Regra: Nunca desliga. Opera o dia todo, pausando apenas entre as 00:30 e as 06:00 da manhã.
 
 import { db } from '@/lib/db';
 import { automationEngine } from './AutomationEngine';
+import { verificarPausaNoturna, QuietHoursStatus } from '@/lib/schedule';
 
 export interface WorkerStatus {
   ativo: boolean;
+  emPausaNoturna: boolean;
+  horaBrasilia: string;
+  mensagemPausa: string;
+  proximaRetomada: string;
   rodandoAgora: boolean;
   ultimoCicloEm: string | null;
   proximoCicloEm: string | null;
@@ -22,22 +28,27 @@ class BackgroundWorker {
   private lastResultText: string | null = null;
 
   constructor() {
-    // Inicia automaticamente o ciclo de monitoramento
     this.init();
   }
 
   private async init() {
-    const settings = await db.getAutomationSettings();
-    if (settings.ativo) {
+    try {
+      const settings = await db.getAutomationSettings();
+      // Piloto automático fica sempre ativo por padrão
       this.start(settings.intervalo_minutos || 15);
+    } catch {
+      this.start(15);
     }
   }
 
   /**
-   * Inicia o temporizador contínuo
+   * Inicia ou reinicia o temporizador contínuo
    */
   start(intervalMinutes: number = 15) {
-    this.stop();
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
 
     const intervalMs = Math.max(intervalMinutes, 2) * 60 * 1000;
     this.nextRun = new Date(Date.now() + intervalMs);
@@ -46,11 +57,11 @@ class BackgroundWorker {
       this.tick();
     }, intervalMs);
 
-    console.log(`[Radar Shopee Worker] Automação em background iniciada. Ciclos a cada ${intervalMinutes} minutos.`);
+    console.log(`[Radar Shopee Worker] Piloto automático ativo. Ciclos contínuos a cada ${intervalMinutes} minutos.`);
   }
 
   /**
-   * Para o temporizador
+   * Para o temporizador temporariamente
    */
   stop() {
     if (this.timer) {
@@ -61,12 +72,14 @@ class BackgroundWorker {
   }
 
   /**
-   * Ciclo de execução periódico
+   * Ciclo de execução periódico programado
    */
   private async tick() {
-    const settings = await db.getAutomationSettings();
-    if (!settings.ativo) {
-      this.stop();
+    // Checa se está no intervalo de pausa noturna (00:30 às 06:00 - Horário de Brasília)
+    const statusPausa = verificarPausaNoturna();
+    if (statusPausa.emPausa) {
+      this.lastResultText = statusPausa.mensagem;
+      console.log(`[Radar Shopee Worker] ${statusPausa.mensagem}`);
       return;
     }
 
@@ -74,11 +87,23 @@ class BackgroundWorker {
   }
 
   /**
-   * Dispara o ciclo de automação agora
+   * Dispara o ciclo de automação
    */
-  async triggerNow(origem: string = 'Disparo Manual'): Promise<any> {
+  async triggerNow(origem: string = 'Disparo Manual', forcar: boolean = false): Promise<any> {
     if (this.isProcessing) {
       return { status: 'alerta', message: 'Um ciclo de automação já está em andamento.' };
+    }
+
+    // Se for ciclo automático (não manual) e estiver na pausa noturna, não executa
+    const statusPausa = verificarPausaNoturna();
+    if (statusPausa.emPausa && !forcar && origem.includes('Automático')) {
+      this.lastResultText = statusPausa.mensagem;
+      return {
+        success: true,
+        em_pausa_noturna: true,
+        message: statusPausa.mensagem,
+        resumo: statusPausa.mensagem,
+      };
     }
 
     this.isProcessing = true;
@@ -126,16 +151,31 @@ class BackgroundWorker {
   }
 
   getStatus(): WorkerStatus {
+    const statusPausa = verificarPausaNoturna();
+
+    // Garante que o timer esteja rodando caso tenha subido uma nova instância serverless
     if (!this.timer) {
-      this.init();
+      this.start(15);
     }
+
+    let resultadoFinal = this.lastResultText;
+    if (statusPausa.emPausa) {
+      resultadoFinal = statusPausa.mensagem;
+    } else if (!resultadoFinal) {
+      resultadoFinal = `Piloto automático ativo (Horário atual: ${statusPausa.horaAtualFormatada}). Operando o dia todo até 00:30.`;
+    }
+
     return {
-      ativo: this.timer !== null,
+      ativo: true, // Sempre ativo (o piloto automático nunca desliga)
+      emPausaNoturna: statusPausa.emPausa,
+      horaBrasilia: statusPausa.horaAtualFormatada,
+      mensagemPausa: statusPausa.mensagem,
+      proximaRetomada: statusPausa.proximaRetomada,
       rodandoAgora: this.isProcessing,
       ultimoCicloEm: this.lastRun ? this.lastRun.toISOString() : null,
       proximoCicloEm: this.nextRun ? this.nextRun.toISOString() : null,
       totalCiclosExecutados: this.cycleCount,
-      ultimoResultado: this.lastResultText,
+      ultimoResultado: resultadoFinal,
       intervaloMinutos: 15,
     };
   }

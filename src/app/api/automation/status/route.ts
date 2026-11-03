@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     }
 
     if (action === 'trigger_now') {
-      const res = await backgroundWorker.triggerNow('Disparo Manual pelo Painel');
+      const res = await backgroundWorker.triggerNow('Disparo Manual pelo Painel', true);
       return NextResponse.json({ ...res, status: backgroundWorker.getStatus() });
     }
 

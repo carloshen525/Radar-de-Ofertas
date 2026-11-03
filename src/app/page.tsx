@@ -147,16 +147,22 @@ export default function DashboardPage() {
         <div className="bg-gradient-to-r from-orange-50 via-white to-amber-50 rounded-2xl p-6 border border-orange-200/80 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  workerStatus?.emPausaNoturna ? 'bg-amber-500' : 'bg-emerald-500'
+                } animate-pulse`}
+              ></span>
               <span className="text-xs font-bold text-orange-600 uppercase tracking-wider">
-                Robô de Mineração & Publicação 24/7
+                {workerStatus?.emPausaNoturna
+                  ? `🌙 Pausa Noturna (00:30 às 06:00) • Retoma às 06:00`
+                  : '🟢 Piloto Automático Ativo • Roda o Dia Todo (06:00 às 00:30)'}
               </span>
             </div>
             <h3 className="text-base font-bold text-slate-900">
               Piloto Automático Shopee ➔ Telegram
             </h3>
             <p className="text-xs text-slate-600 max-w-xl leading-relaxed">
-              O robô busca produtos na Shopee, analisa por score, gera as copys com inteligência artificial e envia com seu link de afiliado para o canal do Telegram sem depender de nenhuma ação manual.
+              O robô busca produtos na Shopee, analisa oportunidades, gera as copys com IA e envia com link de afiliado para o Telegram o dia todo sem parar, pausando automaticamente apenas entre 00:30 e 06:00 da manhã.
             </p>
             {workerStatus?.ultimoResultado && (
               <p className="text-[11px] font-mono text-slate-500 pt-1">
