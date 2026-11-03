@@ -47,6 +47,39 @@ export async function POST(req: Request) {
       return NextResponse.json(res);
     }
 
+    if (action === 'test_all') {
+      if (token) {
+        fileStorage.saveTelegramConfig(token);
+      }
+      const canais = await db.getChannels();
+      const canaisAtivos = canais.filter((c) => c.ativo && c.tipo !== 'admin');
+      if (canaisAtivos.length === 0) {
+        return NextResponse.json({ success: false, message: 'Nenhum canal ativo cadastrado.' });
+      }
+
+      const promises = canaisAtivos.map(async (c) => {
+        const res = await defaultTelegramService.sendTestMessage(c.chat_id, token);
+        return { chat: c.chat_id, nome: c.nome, ...res };
+      });
+
+      const results = await Promise.all(promises);
+      const enviados = results.filter((r) => r.success).length;
+
+      await db.addLog({
+        modulo: 'telegram',
+        evento: 'Teste Simultâneo em Massa',
+        status: enviados === results.length ? 'sucesso' : 'alerta',
+        mensagem: `Disparo simultâneo: ${enviados} de ${results.length} receberam a mensagem de teste.`,
+        detalhes: results,
+      });
+
+      return NextResponse.json({
+        success: enviados > 0,
+        message: `Disparo simultâneo finalizado: ${enviados} de ${results.length} destinos receberam a mensagem!`,
+        detalhes: results,
+      });
+    }
+
     return NextResponse.json({ error: 'Ação inválida' }, { status: 400 });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

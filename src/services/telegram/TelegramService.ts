@@ -184,6 +184,49 @@ export class TelegramService {
       return { success: false, error: err.message };
     }
   }
+
+  /**
+   * Publica a oferta SIMULTANEAMENTE em múltiplos canais e grupos do Telegram em paralelo
+   */
+  async publishOfferSimultaneous(
+    chatIds: string[],
+    options: Omit<TelegramPublishOptions, 'chatId'>
+  ): Promise<{
+    totalEnviados: number;
+    totalFalhas: number;
+    detalhes: Array<{ chatId: string; success: boolean; messageId?: number; error?: string }>;
+  }> {
+    const promises = chatIds.map(async (chatId) => {
+      const res = await this.publishOffer({
+        ...options,
+        chatId,
+      });
+      return {
+        chatId,
+        success: res.success,
+        messageId: res.messageId,
+        error: res.error,
+      };
+    });
+
+    const settled = await Promise.allSettled(promises);
+
+    const detalhes = settled.map((r, i) => {
+      if (r.status === 'fulfilled') {
+        return r.value;
+      }
+      return {
+        chatId: chatIds[i],
+        success: false,
+        error: String(r.reason?.message || r.reason || 'Falha na requisição'),
+      };
+    });
+
+    const totalEnviados = detalhes.filter((d) => d.success).length;
+    const totalFalhas = detalhes.length - totalEnviados;
+
+    return { totalEnviados, totalFalhas, detalhes };
+  }
 }
 
 export const defaultTelegramService = new TelegramService();

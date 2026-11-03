@@ -10,6 +10,7 @@ import { AutomationLogger } from '@/utils/logger';
 import { db } from '@/lib/db';
 import { isRoupaFeminina } from '@/lib/filters';
 import { verificarPausaNoturna } from '@/lib/schedule';
+import { cleanTelegramChatId } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // 60 segundos para execução na Vercel
@@ -153,57 +154,67 @@ export async function POST(req: Request) {
     logger.info('Gerando postagem...');
     const postGerado = await defaultPostGeneratorService.generatePost(produtoParaPostar);
 
-    // Etapa 5: Enviar automaticamente para o Telegram
-    logger.info('Enviando para Telegram...');
-
-    // Recupera canais de destino configurados
+    // Etapa 5: Enviar simultaneamente para todos os canais e grupos configurados
+    // Recupera destinos do body, do banco de dados (Supabase) e de TELEGRAM_CHAT_ID (lista separada por vírgula)
     let destinos: string[] = [];
-    if (targetChatId) {
-      destinos = [targetChatId];
-    } else if (process.env.TELEGRAM_CHAT_ID) {
-      destinos = [process.env.TELEGRAM_CHAT_ID];
-    } else {
-      const canais = await db.getChannels();
-      const canaisAtivos = canais.filter((c) => c.ativo && c.tipo !== 'admin');
-      destinos = canaisAtivos.map((c) => c.chat_id);
+
+    const rawTargets = body.destinos || body.chats || body.chatIds || body.chat_id || body.chatId;
+    if (rawTargets) {
+      if (Array.isArray(rawTargets)) {
+        destinos.push(...rawTargets.map((c: any) => String(c).trim()));
+      } else if (typeof rawTargets === 'string') {
+        destinos.push(...rawTargets.split(',').map((c) => c.trim()));
+      }
     }
+
+    const canaisDb = await db.getChannels();
+    const canaisAtivos = canaisDb
+      .filter((c) => c.ativo && c.tipo !== 'admin')
+      .map((c) => c.chat_id.trim());
+    destinos.push(...canaisAtivos);
+
+    if (process.env.TELEGRAM_CHAT_ID) {
+      const envChats = process.env.TELEGRAM_CHAT_ID.split(',').map((c) => c.trim());
+      destinos.push(...envChats);
+    }
+
+    // Sanitiza e remove duplicidades
+    destinos = Array.from(new Set(destinos.map(cleanTelegramChatId).filter(Boolean)));
 
     if (destinos.length === 0) {
-      destinos = [process.env.TELEGRAM_CHAT_ID || '@radarsshopee']; // Fallback padrão
+      destinos = ['@radarsshopee'];
     }
 
-    let envioComSucesso = false;
-    let ultimoErro = '';
+    logger.info(`Enviando simultaneamente para ${destinos.length} canal(is)/grupo(s): ${destinos.join(', ')}...`);
 
-    for (const chat of destinos) {
-      const envio = await defaultTelegramService.publishOffer({
-        chatId: chat,
-        photoUrl: postGerado.imagemUrl,
-        caption: postGerado.legenda,
-        affiliateUrl: postGerado.linkAfiliado,
-        buttonText: postGerado.botaoTexto,
-      });
+    const envioSimultaneo = await defaultTelegramService.publishOfferSimultaneous(destinos, {
+      photoUrl: postGerado.imagemUrl,
+      caption: postGerado.legenda,
+      affiliateUrl: postGerado.linkAfiliado,
+      buttonText: postGerado.botaoTexto,
+    });
 
-      if (envio.success) {
-        envioComSucesso = true;
+    for (const res of envioSimultaneo.detalhes) {
+      if (res.success) {
+        logger.info(`[✓] Enviado com sucesso para ${res.chatId}`);
         await db.addPublication({
           product_id: produtoParaPostar.produto_id,
-          telegram_channel: chat,
-          telegram_message_id: envio.messageId,
+          telegram_channel: res.chatId,
+          telegram_message_id: res.messageId,
           legenda_enviada: postGerado.legenda,
           status: 'publicado',
         });
       } else {
-        ultimoErro = envio.error || 'Erro desconhecido ao enviar ao Telegram';
-        logger.error(`Falha no envio para ${chat}: ${ultimoErro}`);
+        logger.error(`[✗] Falha no envio para ${res.chatId}: ${res.error}`);
       }
     }
 
-    if (!envioComSucesso) {
-      throw new Error(`Falha no envio da mensagem para o Telegram: ${ultimoErro}`);
+    if (envioSimultaneo.totalEnviados === 0) {
+      const erros = envioSimultaneo.detalhes.map((d) => `${d.chatId}: ${d.error}`).join(' | ');
+      throw new Error(`Falha no envio para todos os destinos: ${erros}`);
     }
 
-    logger.info('Mensagem enviada com sucesso.');
+    logger.info(`Publicação concluída: ${envioSimultaneo.totalEnviados} enviado(s) com sucesso de ${destinos.length} destino(s).`);
 
     // Etapa 6: Atualizar banco marcando publicado = true e data_publicacao
     logger.info('Atualizando banco...');

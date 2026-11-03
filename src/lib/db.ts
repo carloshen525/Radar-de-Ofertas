@@ -11,7 +11,7 @@ import {
   SystemLog,
   DashboardStats,
 } from './types';
-import { fileStorage } from './storage';
+import { fileStorage, cleanTelegramChatId } from './storage';
 
 let supabaseInstance: SupabaseClient | null = null;
 
@@ -271,34 +271,89 @@ export const db = {
 
   // 4. Telegram Channels
   async getChannels(): Promise<TelegramChannel[]> {
+    const list: TelegramChannel[] = [];
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        const { data } = await supabase.from('telegram_channels').select('*').order('created_at', { ascending: false });
-        if (data && data.length > 0) return data as TelegramChannel[];
+        const { data } = await supabase
+          .from('telegram_channels')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (data && data.length > 0) {
+          list.push(...(data as TelegramChannel[]));
+        }
       } catch {}
     }
-    return fileStorage.getChannels();
+
+    if (list.length === 0) {
+      list.push(...fileStorage.getChannels());
+    }
+
+    // Se houver canais configurados no TELEGRAM_CHAT_ID que não estejam na lista, adiciona
+    if (process.env.TELEGRAM_CHAT_ID) {
+      const envChats = process.env.TELEGRAM_CHAT_ID.split(',').map((c) => c.trim()).filter(Boolean);
+      for (const envChat of envChats) {
+        const clean = cleanTelegramChatId(envChat);
+        if (!list.some((c) => cleanTelegramChatId(c.chat_id) === clean)) {
+          list.push({
+            id: `chan-env-${clean.replace(/[^a-zA-Z0-9]/g, '')}`,
+            nome: `Canal (${clean})`,
+            chat_id: clean,
+            tipo: 'canal',
+            ativo: true,
+            total_enviados: 0,
+            created_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    return list;
   },
 
   async addChannel(channel: Omit<TelegramChannel, 'id' | 'created_at' | 'total_enviados'>): Promise<TelegramChannel> {
+    const cleanChat = cleanTelegramChatId(channel.chat_id);
     const all = fileStorage.getChannels();
     const newChannel: TelegramChannel = {
       ...channel,
-      id: `chan-${Date.now()}`,
+      chat_id: cleanChat,
+      id: `chan-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       total_enviados: 0,
       created_at: new Date().toISOString(),
     };
-    all.push(newChannel);
+
+    const idx = all.findIndex((c) => cleanTelegramChatId(c.chat_id) === cleanChat);
+    if (idx >= 0) {
+      all[idx] = { ...all[idx], ...newChannel };
+    } else {
+      all.push(newChannel);
+    }
     fileStorage.saveChannels(all);
 
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        await supabase.from('telegram_channels').insert(newChannel);
+        await supabase.from('telegram_channels').upsert(newChannel, { onConflict: 'chat_id' });
       } catch {}
     }
     return newChannel;
+  },
+
+  async updateChannel(id: string, updates: Partial<TelegramChannel>): Promise<TelegramChannel | null> {
+    const all = fileStorage.getChannels();
+    const idx = all.findIndex((c) => c.id === id);
+    if (idx >= 0) {
+      all[idx] = { ...all[idx], ...updates };
+      fileStorage.saveChannels(all);
+    }
+
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        await supabase.from('telegram_channels').update(updates).eq('id', id);
+      } catch {}
+    }
+    return all[idx] || null;
   },
 
   async deleteChannel(id: string): Promise<boolean> {
