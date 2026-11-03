@@ -42,6 +42,7 @@ export interface RadarFilterConfig {
   precoMinimo: number;
   precoMaximo: number;
   limitePorBusca: number;
+  pagina?: number;
 }
 
 export interface TelegramChannel {

@@ -144,11 +144,13 @@ export class ShopeeProvider implements MarketplaceProvider {
 
     // Para garantir que tenhamos produtos suficientes para cumprir a meta solicitada após os filtros,
     // buscamos páginas da API da Shopee com lote de 50 itens.
+    const startPage = Math.max(config.pagina || 1, 1);
     const maxPages = targetLimit > 30 ? 3 : 2;
     const allNodes: any[] = [];
 
     try {
-      for (let page = 1; page <= maxPages; page++) {
+      for (let pOffset = 0; pOffset < maxPages; pOffset++) {
+        const page = startPage + pOffset;
         const keywordClause = keyword ? `keyword: "${keyword}", ` : '';
         const query = `{
           productOfferV2(${keywordClause}page: ${page}, limit: 50, sortType: 1) {

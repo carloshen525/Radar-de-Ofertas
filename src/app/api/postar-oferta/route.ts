@@ -66,7 +66,7 @@ export async function POST(req: Request) {
     let produtoParaPostar: ProdutoDB | null = await defaultSupabaseService.obterProximoElegivel(14);
 
     // Caso não existam produtos elegíveis na fila:
-    // Realiza uma nova busca na Shopee (página 2 ou termo alternativo)
+    // Realiza uma nova busca na Shopee (página 2, página 3 ou termos alternativos)
     if (!produtoParaPostar) {
       logger.info('Nenhum produto livre na fila. Realizando busca avançada na Shopee (página 2)...');
       const produtosPagina2 = await defaultShopeeService.buscarOfertas(2, 40, categoria);
@@ -74,6 +74,18 @@ export async function POST(req: Request) {
       logger.info(`${resultado2.adicionados} novos produtos adicionados na segunda busca.`);
 
       produtoParaPostar = await defaultSupabaseService.obterProximoElegivel(14);
+    }
+
+    if (!produtoParaPostar) {
+      const termosAlternativos = ['Utilidades', 'Casa', 'Eletrônicos', 'Ferramentas'];
+      for (const termo of termosAlternativos) {
+        if (produtoParaPostar) break;
+        logger.info(`Buscando ofertas frescas na categoria "${termo}"...`);
+        const prodsAlt = await defaultShopeeService.buscarOfertas(1, 40, termo);
+        const resAlt = await defaultSupabaseService.salvarNovosProdutos(prodsAlt, 14);
+        logger.info(`${resAlt.adicionados} novos produtos adicionados em ${termo}.`);
+        produtoParaPostar = await defaultSupabaseService.obterProximoElegivel(14);
+      }
     }
 
     // Se mesmo assim não existir nenhum produto novo:

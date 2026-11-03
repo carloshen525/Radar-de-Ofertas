@@ -35,6 +35,7 @@ export class ShopeeService {
   async buscarOfertas(page: number = 1, limit: number = 30, categoria: string = 'Geral'): Promise<ProdutoShopee[]> {
     const result = await this.provider.searchOffers({
       categoria,
+      pagina: page,
       limitePorBusca: limit,
       descontoMinimo: 10,
       avaliacaoMinima: 3.8,
